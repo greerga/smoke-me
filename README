@@ -1,0 +1,39 @@
+(from my email to p5p)
+
+Notes:
+
+- The "mesmoke.pl" is the live copy running on my Win32 VM.  The "mesmoke"
+  copy is an untested attempt to remove the --split-smoke failure.
+
+- The "prep_git() / split-smoke" stuff was a failed experiment back when 
+  I was having Git run on my Linux host and the smoke run on the Win32 VM.
+ 
+- You'll need Cygwin git.  Msysgit causes test failures.
+
+- To run as a "smoke-me" client, the variables %COMMITTER_EMAIL% and
+  %COMMITTER_NAME% are search/replaced in the Test::Smoke config hash  
+  from a config file with ".template" appended.
+  (ex: smoke-me_smoke.config.template -> smoke-me_smoke.config)
+
+- I've attached my configurations as examples.  From what I remember,  
+  forest mode is required and there's a variable that needs added to the
+  Test::Smoke $conf configuration hash... maybe 'adir'? I forget.  Also,
+  it needs configured to use "rsync" but have the rsync command be a no-op.
+
+- There's no configuration file yet so many variables in the script need  
+  changed per deployment.  Something to fix.
+
+- On the second and subsequent runs it complains (in Win32 VM copy):
+        Filehandle STDIN reopened as $dotpatch only for output at mesmoke.pl line 126.
+        Filehandle STDIN reopened as $logfh only for output at mesmoke.pl line 177.
+  I've yet to find the cause (Perl test suite closing filehandles?) but it
+  doesn't seem to have a negative impact yet.
+
+- To run for blead I do:
+        perl.exe mesmoke.pl --pattern ^remotes/origin/blead$ --what blead
+  for smoke-me it is simply:
+        perl.exe mesmoke.pl
+
+- You'll probably want to do:
+        set CYGWIN=nodosfilewarning
+  to silence a warning.
