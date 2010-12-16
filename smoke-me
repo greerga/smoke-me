@@ -12,7 +12,6 @@ use IPC::Open3   qw[open3];
 use Getopt::Long qw[GetOptions];
 use File::Path   qw[remove_tree];
 
-sub gsay;
 
 # Configuration for smoke behavior.
 my $remote  = "origin";
@@ -30,12 +29,10 @@ my ($git, $perl, $rsync, $ssh, $workdir, $cfgtmpl, $cfg, $smokepl, $smoker, $log
 my $what = "smoke-me";
 
 my %o = (
-    'split'       => false,
-    'split-smoke' => false,
     'pattern'     => \$pattern,
     'what'        => \$what,
 );
-GetOptions(\%o, "split-smoke!", "split!", "pattern=s", "what=s")
+GetOptions(\%o, "split!", "pattern=s", "what=s")
     or die "Unknown otions: @ARGV";
 
 $o{'pattern'} = $pattern;
@@ -93,34 +90,123 @@ if (! -d $worksrcdir) {
     }
 }
 
-my $fh;
-
-if ($o{'split-smoke'}) {
-    $SIG{'__WARN__'} = sub { $messages .= join("", @_) . "\n"; warn @_; };
-
-    Storable::store({'_messages' => "Abnormal exit"}, "$workdir/$o{'what'}.state")
-        or die "store: $!";
-
-    my $winner = prep_git();
-    $winner->{'_messages'} = $messages;
-    Storable::store($winner, "$workdir/$o{'what'}.state")
-        or die "store: $!";
-
-    return 0;
-}
-
 chdir $worksrcdir
     or die "$worksrcdir: chdir: $!";
 
+my $fh;
 for (;;) {
-    my $winner = prep_git();
-    if (defined $winner && exists $winner->{'_messages'}) {
-        print delete $winner->{'_messages'};
+    # Begin remote section.
+
+    # Switch to a "neutral" branch because "branch -D" fails on the current one.
+    # git checkout
+    system $git, "checkout", "-q", "-f", "$remote/blead";
+    die "git checkout: $?"
+        if $?;
+
+    # git fetch
+    system $git, "fetch", "-q", "--prune", $remote;
+    warn "git fetch: $?"
+        if $?;
+
+    # Begin local section.
+
+    # git branch
+    my %branch;
+    open $fh, "$git branch -av |"
+        or die "git branch: open: $?";
+    while (<$fh>) {
+        chomp;
+        if (!/^\*?\s*(?<name>\S+)\s+(?<sha>\S+)\s+(?<subject>.*)$/) {
+            warn "'git branch' speaking in tongues? $_\n";
+            next;
+        }
+        next if $+{sha} eq "->";  # references
+        $branch{$+{name}} = $+{sha};
     }
-    if (!defined $winner || not keys %$winner) {
-        sleep 3600;
+    close $fh
+        or die "git branch: close: $!";
+
+    # Which remote branches don't match our local?
+    my @remote_branches = sort map { s{^remotes/\Q$remote\E/}{} ? $_ : () } grep { /$pattern/ } keys %branch;
+    say scalar localtime, " | Remote branches:";
+    foreach my $branch (sort @remote_branches) {
+        say scalar localtime, " | ",
+            !exists $branch{$branch} || $branch{"remotes/$remote/$branch"} ne $branch{$branch} ? "... " : "    ",
+            $branch{"remotes/$remote/$branch"}, "\t", $branch;
+    }
+    my @candidates = grep { !exists $branch{$_} || $branch{"remotes/$remote/$_"} ne $branch{$_} } @remote_branches;
+    if (@candidates == 0) {
+        say scalar localtime, " | No candidates; sleeping.";
+        sleep $o{'sleep'};
         next;
     }
+
+    # git log
+    my @age;
+    foreach my $name (@candidates) {
+        my $sha = $branch{"remotes/$remote/$name"}
+            or die;
+        # %ci = commit date, ISO 8601 format
+        # %H  = commit hash
+        # %cn = committer name
+        # %ce = committer email
+        # %n  = \n
+        open $fh, qq{$git log -1 --pretty=format:"ci=%ci|H=%H|cn=%cn|ce=%ce%n" $sha |}
+            or die "git log: open: $?";
+        while (<$fh>) {
+            chomp;
+            my %data = map { /^([^=]+)=(.*)$/ } split /\|/;
+            if (keys %data == 0) {
+                warn "'git log' speaking in tongues? $_\n";
+                next;
+            }
+            $data{'branch'} = $name;
+            push @age, \%data;
+        }
+        close $fh
+            or warn "git log: close($sha): $!";
+    }
+
+    # Find the oldest SHA.
+    @age = sort { $a->{'ci'} cmp $b->{'ci'} } @age;
+    say "Smoke order:";
+    foreach my $item (@age) {
+        my $datetime = $item->{'ci'};
+        $datetime =~ s/ [+-]\d{4}$//;
+        say "  $datetime $item->{'branch'} -- $item->{'cn'} <$item->{'ce'}>";
+    }
+    my $winner = $age[0];
+
+    # This is likely not needed anymore with the "checkout -f".
+    # git clean
+    system $git, "clean", "-dxqf";
+    die "git clean: $?"
+        if $?;
+
+    # git branch
+    if (exists $branch{$winner->{'branch'}}) {
+        system $git, "branch", "-D", $winner->{'branch'};
+        die "git branch: $?"
+            if $?;
+    }
+
+    # git gc
+    system $git, "gc", "--auto", "--quiet";
+    die "git gc: $?"
+        if $?;
+
+    # git checkout
+    system $git, "checkout", "-q", "-f", $winner->{'branch'};
+    die "git checkout: $?"
+        if $?;
+
+    # This may be no longer necessary since 'branch -D/checkout' starts clean.
+    # But we do it anyway in case 'git branch -D' fails miserably. It is
+    # better to hallucinate up-to-date than fail to update and spam reports.
+    # git pull
+    system $git, "pull", "-q", $remote, $winner->{'branch'};
+    die "git pull: $?"
+        if $?;
 
     # Create .patch for Test::Smoke.
     open my $dotpatch, ">", ".patch"
@@ -207,137 +293,4 @@ sub remove_gitignore
         unlink $File::Find::name
             or die "$File::Find::name: unlink: $!";
     }
-}
-
-sub prep_git
-{
-    if ($^O eq "MSWin32" && $o{'split'} && !$o{'split-smoke'}) {
-        $ENV{PERLDB_OPTS} = "AutoTrace=1 NonStop";
-        system "start", "/wait", $^X, "$Bin/$Script", "--split-smoke";
-        die "$Bin/$Script: $?"
-            if $?;
-        return Storable::retrieve("$workdir/$o{'what'}.state");
-    }
-
-    # Begin remote section.
-
-    # Switch to a "neutral" branch because "branch -D" fails on the current one.
-    # git checkout
-    system $git, "checkout", "-q", "-f", "$remote/blead";
-    die "git checkout: $?"
-        if $?;
-
-    # git fetch
-    system $git, "fetch", "-q", "--prune", $remote;
-    warn "git fetch: $?"
-        if $?;
-
-    # Begin local section.
-
-    # git branch
-    my %branch;
-    open $fh, "$git branch -av |"
-        or die "git branch: open: $?";
-    while (<$fh>) {
-        chomp;
-        if (!/^\*?\s*(?<name>\S+)\s+(?<sha>\S+)\s+(?<subject>.*)$/) {
-            warn "'git branch' speaking in tongues? $_\n";
-            next;
-        }
-        next if $+{sha} eq "->";  # references
-        $branch{$+{name}} = $+{sha};
-    }
-    close $fh
-        or die "git branch: close: $!";
-
-    # Which remote branches don't match our local?
-    my @remote_branches = sort map { s{^remotes/\Q$remote\E/}{} ? $_ : () } grep { /$pattern/ } keys %branch;
-    gsay scalar localtime, " | Remote branches:";
-    foreach my $branch (sort @remote_branches) {
-        gsay scalar localtime, " | ",
-            !exists $branch{$branch} || $branch{"remotes/$remote/$branch"} ne $branch{$branch} ? "... " : "    ",
-            $branch{"remotes/$remote/$branch"}, "\t", $branch;
-    }
-    my @candidates = grep { !exists $branch{$_} || $branch{"remotes/$remote/$_"} ne $branch{$_} } @remote_branches;
-    if (@candidates == 0) {
-        gsay scalar localtime, " | No candidates; sleeping.";
-        return;
-    }
-
-    # git log
-    my @age;
-    foreach my $name (@candidates) {
-        my $sha = $branch{"remotes/$remote/$name"}
-            or die;
-        # %ci = commit date, ISO 8601 format
-        # %H  = commit hash
-        # %cn = committer name
-        # %ce = committer email
-        # %n  = \n
-        open $fh, qq{$git log -1 --pretty=format:"ci=%ci|H=%H|cn=%cn|ce=%ce%n" $sha |}
-            or die "git log: open: $?";
-        while (<$fh>) {
-            chomp;
-            my %data = map { /^([^=]+)=(.*)$/ } split /\|/;
-            if (keys %data == 0) {
-                warn "'git log' speaking in tongues? $_\n";
-                next;
-            }
-            $data{'branch'} = $name;
-            push @age, \%data;
-        }
-        close $fh
-            or warn "git log: close($sha): $!";
-    }
-
-    # Find the oldest SHA.
-    @age = sort { $a->{'ci'} cmp $b->{'ci'} } @age;
-    gsay "Smoke order:";
-    foreach my $item (@age) {
-        my $datetime = $item->{'ci'};
-        $datetime =~ s/ [+-]\d{4}$//;
-        gsay "  $datetime $item->{'branch'} -- $item->{'cn'} <$item->{'ce'}>";
-    }
-    my $winner = $age[0];
-
-    # This is likely not needed anymore with the "checkout -f".
-    # git clean
-    system $git, "clean", "-dxqf";
-    die "git clean: $?"
-        if $?;
-
-    # git branch
-    if (exists $branch{$winner->{'branch'}}) {
-        system $git, "branch", "-D", $winner->{'branch'};
-        die "git branch: $?"
-            if $?;
-    }
-
-    # git gc
-    system $git, "gc", "--auto", "--quiet";
-    die "git gc: $?"
-        if $?;
-
-    # git checkout
-    system $git, "checkout", "-q", "-f", $winner->{'branch'};
-    die "git checkout: $?"
-        if $?;
-
-    # This may be no longer necessary since 'branch -D/checkout' starts clean.
-    # But we do it anyway in case 'git branch -D' fails miserably. It is
-    # better to hallucinate up-to-date than fail to update and spam reports.
-    # git pull
-    system $git, "pull", "-q", $remote, $winner->{'branch'};
-    die "git pull: $?"
-        if $?;
-
-    return $winner;
-}
-
-sub gsay
-{
-    if ($o{'split-smoke'}) {
-        $messages .= join("", @_) . "\n";
-    }
-    say @_;
 }
