@@ -1,0 +1,28 @@
+Samples of the templates I use for my own smoking.  You will need to adjust
+the paths if you don't match the directories (and drives) that I use,
+although it is better that you generate your own Test::Smoke configuration
+really.  Just make sure to choose "forest" mode and sync with 'rsync' mode
+but have the 'rsync' binary set to "/bin/true".
+
+    WARNING: My Linux templates use 'make -j'!
+
+The general directory structure expected is:
+
+$HOME
+    smoke/
+        driver/
+            logs/
+                <branch>
+            *.config.template
+        perl/
+            <branch>
+                build/
+                inter/
+                source/
+                    .git/
+
+Commands I use to execute are:
+
+    ./mesmoke --what blead_g++ --pattern '^remotes/origin/blead$' &
+    ./mesmoke --what smoke-me_g++ &
+    wait
