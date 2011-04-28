@@ -12,31 +12,33 @@ use IPC::Open3   qw[open3];
 use Getopt::Long qw[GetOptions];
 use File::Path   qw[remove_tree];
 
-
-# Configuration for smoke behavior.
-my $remote  = "origin";
-my $pattern = qr{^remotes/\Q$remote\E/smoke-me/};
-
-# In case of fork'ing to get messages back to main process.
-my $messages = "";
+sub msay(@);
+sub nsay(@);
 
 # Be really 'nice'.
 eval { setpriority 0, 0, 20 };
 
 # -----
 
-my ($git, $perl, $rsync, $ssh, $workdir, $cfgtmpl, $cfg, $smokepl, $smoker, $log_dst, @cmd);
-my $what = "smoke-me";
+my ($git, $perl, $rsync, $ssh, $workdir, $cfgtmpl, $cfg, $smokepl, $smoker, $log_dst, @cmd, $cmz_bin);
 
 my %o = (
-    'pattern'     => \$pattern,
-    'what'        => \$what,
+    'pattern'     => undef,
+    'what'        => "smoke-me",
+    'sleep'       => 60*15,     # seconds
+    'remote'      => undef,
 );
-GetOptions(\%o, "split!", "pattern=s", "what=s")
+GetOptions(\%o, "pattern=s", "what=s", "sleep=s")
     or die "Unknown otions: @ARGV";
 
-$o{'pattern'} = $pattern;
-$o{'what'}    = $what;
+# Set defaults and compile patterns.
+if (defined $o{'pattern'} and not defined $o{'remote'}) {
+    ($o{'remote'}) = $o{'pattern'} =~ m{\bremotes/([^/]+)}
+        or die "Unable to determine remote from pattern: $o{'pattern'}\n";
+}
+$o{'remote'}  //= "origin";
+$o{'pattern'} //= "^remotes/$o{'remote'}/smoke-me/";
+$o{'pattern'} = qr/$o{'pattern'}/;
 
 # Configuration for installation location.
 if ($^O eq "MSWin32") {
@@ -46,8 +48,9 @@ if ($^O eq "MSWin32") {
     $perl    = q{"c:/perl/bin/perl.exe"};
     $rsync   = q{"c:/program files/cwrsync/bin/rsync.exe"};
     $ssh     = q{"'c:/program files/cwrsync/bin/ssh.exe'"};
+    $cmz_bin = q{"c:/cygwin/bin/gzip.exe"};
     $workdir = "d:/smoke/perl/$o{'what'}";
-    $cfg     = "$o{'what'}_smoke.config";
+    $cfg     = "d:/smoke/driver/$o{'what'}_smoke.config";
     $smokepl = "d:/smoke/driver/$o{'what'}_smoke.cmd";
     $smoker  = "d:/smoke/driver";
     $log_dst = 'perl@m-l.org:www/smoke/perl/win32';
@@ -58,27 +61,29 @@ if ($^O eq "MSWin32") {
     $perl    = "/usr/bin/perl";
     $rsync   = "/usr/bin/rsync";
     $ssh     = "/usr/bin/ssh";
-    $workdir = "$ENV{HOME}/work/smoke_$o{'what'}";
-    $cfg     = "$o{'what'}_config";
-    $smokepl = "$ENV{HOME}/mod/Test-Smoke/smokeperl.pl";
-    $smoker  = "$ENV{HOME}/mod/smoke";
+    $cmz_bin = "/bin/gzip";
+    $workdir = "$ENV{HOME}/smoke/perl/$o{'what'}";
+    $cfg     = "$ENV{HOME}/smoke/driver/$o{'what'}.config";
+    $smokepl = "$ENV{HOME}/smoke/driver/$o{'what'}.sh";
+    $smoker  = "$ENV{HOME}/smoke/driver";
     $log_dst = 'perl@m-l.org:www/smoke/perl/linux';
-    @cmd     = ($perl, $smokepl, "-c", "$o{'what'}");
+    @cmd     = ($smokepl);
 }
 
 $cfgtmpl = $cfg . ".template";
 
+my $cmz_opt    = "-9f";
 my $worksrcdir = "$workdir/source";
 my $workintdir = "$workdir/inter";
 my $workblddir = "$workdir/build";
-my $srcdir     = "$ENV{HOME}/git/perl";
-my $log        = "$o{'what'}.log";
+my $srcdir     = "$ENV{HOME}/smoke/git/perl";
+my $log        = "$o{'what'}-mesmoke.log";
 
 # -----
 
 if (! -d $worksrcdir) {
     system $rsync, "-a", $srcdir, $worksrcdir;
-    die "rsync: $?"
+    die "rsync -a $srcdir $worksrcdir: $?"
         if $?;
 } elsif (! -d "$worksrcdir/.git") {
     # Might have exited during smoking while .git/ was moved away.
@@ -99,12 +104,12 @@ for (;;) {
 
     # Switch to a "neutral" branch because "branch -D" fails on the current one.
     # git checkout
-    system $git, "checkout", "-q", "-f", "$remote/blead";
+    system $git, "checkout", "-q", "-f", "$o{'remote'}/blead";
     die "git checkout: $?"
         if $?;
 
     # git fetch
-    system $git, "fetch", "-q", "--prune", $remote;
+    system $git, "fetch", "-q", "--prune", $o{'remote'};
     warn "git fetch: $?"
         if $?;
 
@@ -127,16 +132,19 @@ for (;;) {
         or die "git branch: close: $!";
 
     # Which remote branches don't match our local?
-    my @remote_branches = sort map { s{^remotes/\Q$remote\E/}{} ? $_ : () } grep { /$pattern/ } keys %branch;
-    say scalar localtime, " | Remote branches:";
+    my @remote_branches = sort map { s{^remotes/\Q$o{'remote'}\E/}{} ? $_ : () } grep { $_ =~ $o{'pattern'} } keys %branch;
+    msay "Remote branches:";
     foreach my $branch (sort @remote_branches) {
-        say scalar localtime, " | ",
-            !exists $branch{$branch} || $branch{"remotes/$remote/$branch"} ne $branch{$branch} ? "... " : "    ",
-            $branch{"remotes/$remote/$branch"}, "\t", $branch;
+        my $active = !exists $branch{$branch}
+                  || $branch{"remotes/$o{'remote'}/$branch"} ne $branch{$branch}
+                    ? "... "
+                    : "    "
+                    ;
+        msay $active, $branch{"remotes/$o{'remote'}/$branch"}, "\t", $branch;
     }
-    my @candidates = grep { !exists $branch{$_} || $branch{"remotes/$remote/$_"} ne $branch{$_} } @remote_branches;
+    my @candidates = grep { !exists $branch{$_} || $branch{"remotes/$o{'remote'}/$_"} ne $branch{$_} } @remote_branches;
     if (@candidates == 0) {
-        say scalar localtime, " | No candidates; sleeping.";
+        msay "No candidates; sleeping.";
         sleep $o{'sleep'};
         next;
     }
@@ -144,7 +152,7 @@ for (;;) {
     # git log
     my @age;
     foreach my $name (@candidates) {
-        my $sha = $branch{"remotes/$remote/$name"}
+        my $sha = $branch{"remotes/$o{'remote'}/$name"}
             or die;
         # %ci = commit date, ISO 8601 format
         # %H  = commit hash
@@ -169,11 +177,11 @@ for (;;) {
 
     # Find the oldest SHA.
     @age = sort { $a->{'ci'} cmp $b->{'ci'} } @age;
-    say "Smoke order:";
+    nsay "Smoke order:";
     foreach my $item (@age) {
         my $datetime = $item->{'ci'};
         $datetime =~ s/ [+-]\d{4}$//;
-        say "  $datetime $item->{'branch'} -- $item->{'cn'} <$item->{'ce'}>";
+        nsay "  $datetime $item->{'branch'} -- $item->{'cn'} <$item->{'ce'}>";
     }
     my $winner = $age[0];
 
@@ -204,7 +212,7 @@ for (;;) {
     # But we do it anyway in case 'git branch -D' fails miserably. It is
     # better to hallucinate up-to-date than fail to update and spam reports.
     # git pull
-    system $git, "pull", "-q", $remote, $winner->{'branch'};
+    system $git, "pull", "-q", $o{'remote'}, $winner->{'branch'};
     die "git pull: $?"
         if $?;
 
@@ -262,19 +270,35 @@ for (;;) {
     # Execute smoker.
     open my $logfh, ">", $log
         or die "$log: open(>): $!";
-    my $pid = open3(\*STDIN, ">&" . fileno($logfh), ">&" . fileno($logfh), @cmd);
-    say scalar localtime, " | Started";
+    my $pid = open3(\*STDIN, $logfh, $logfh, @cmd);
+    msay "Started";
 
     # Wait for the smoker to finish.
     waitpid $pid, 0;
-    my $exit_status = $? >> 0;
-    say scalar localtime, " | Finished: $exit_status";
+    my $exit_status = $? >> 8;
+    msay "Finished: $exit_status";
     close $logfh
         or warn "$log: close: $!";
 
     # Replace .git for working.
     move "$workdir/.git", "$worksrcdir/.git"
         or die "$workdir/.git -> $worksrcdir/.git: move: $!";
+
+    # Compress *.log files to reduce download time.
+    find({
+            'no_chdir' => true,
+            'wanted' => sub {
+                my $file = $File::Find::name;
+                if ($file =~ /\.log$/i) {
+                    system $cmz_bin, $cmz_opt, $file;
+                    if ($?) {
+                        warn "$file: gzip: error status ", ($? >> 8), "\n";
+                    }
+                }
+            },
+        },
+        "logs/",
+    );
 
     # Publish reports on web site. (In case of network outage, it is nonfatal.)
     system $rsync, "-e", $ssh, "-az", "logs/", $log_dst;
@@ -293,4 +317,14 @@ sub remove_gitignore
         unlink $File::Find::name
             or die "$File::Find::name: unlink: $!";
     }
+}
+
+sub msay(@)
+{
+    say substr(scalar localtime, 4), " [$o{'what'}] ", @_;
+}
+
+sub nsay(@)
+{
+    say "[$o{'what'}] ", @_;
 }
