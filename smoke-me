@@ -25,7 +25,7 @@ my ($git, $perl, $rsync, $ssh, $workdir, $cfgtmpl, $cfg, $smokepl, $smoker, $log
 my %o = (
     'pattern'     => undef,
     'what'        => "smoke-me",
-    'sleep'       => 60*15,     # seconds
+    'sleep'       => 60*5,  # seconds
     'remote'      => undef,
 );
 GetOptions(\%o, "pattern=s", "what=s", "sleep=s")
