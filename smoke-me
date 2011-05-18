@@ -220,6 +220,7 @@ for (;;) {
 
     # Create .patch for Test::Smoke.
     my $describe = `$git describe`;
+    chomp $describe;
     open my $dotpatch, ">", ".patch"
         or die ".patch: open(>): $!";
     {
