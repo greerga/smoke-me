@@ -219,6 +219,7 @@ for (;;) {
         if $?;
 
     # Create .patch for Test::Smoke.
+    my $describe = `$git describe`;
     open my $dotpatch, ">", ".patch"
         or die ".patch: open(>): $!";
     {
@@ -227,7 +228,7 @@ for (;;) {
             s/\s*[+-]\d{4}$//;
             tr/ /./;
         }
-        say $dotpatch join " ", $winner->{'branch'}, $dotpatch_iso8601, $winner->{'H'},`git describe`;
+        say $dotpatch join " ", $winner->{'branch'}, $dotpatch_iso8601, $winner->{'H'}, $describe;
     }
     close $dotpatch
         or warn ".patch: close: $!";
@@ -273,7 +274,7 @@ for (;;) {
     open my $logfh, ">", $log
         or die "$log: open(>): $!";
     my $pid = open3(\*STDIN, $logfh, $logfh, @cmd);
-    msay "Started";
+    msay "Started $describe";
 
     # Wait for the smoker to finish.
     waitpid $pid, 0;
