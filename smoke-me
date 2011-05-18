@@ -133,18 +133,20 @@ for (;;) {
 
     # Which remote branches don't match our local?
     my @remote_branches = sort map { s{^remotes/\Q$o{'remote'}\E/}{} ? $_ : () } grep { $_ =~ $o{'pattern'} } keys %branch;
-    msay "Remote branches:";
-    foreach my $branch (sort @remote_branches) {
-        my $active = !exists $branch{$branch}
-                  || $branch{"remotes/$o{'remote'}/$branch"} ne $branch{$branch}
-                    ? "... "
-                    : "    "
-                    ;
-        msay $active, $branch{"remotes/$o{'remote'}/$branch"}, "\t", $branch;
+    if (0) {
+        msay "Remote branches:";
+        foreach my $branch (sort @remote_branches) {
+            my $active = !exists $branch{$branch}
+                      || $branch{"remotes/$o{'remote'}/$branch"} ne $branch{$branch}
+                        ? "... "
+                        : "    "
+                        ;
+            msay $active, $branch{"remotes/$o{'remote'}/$branch"}, "\t", $branch;
+        }
     }
     my @candidates = grep { !exists $branch{$_} || $branch{"remotes/$o{'remote'}/$_"} ne $branch{$_} } @remote_branches;
     if (@candidates == 0) {
-        msay "No candidates; sleeping.";
+#        msay "No candidates; sleeping.";
         sleep $o{'sleep'};
         next;
     }
