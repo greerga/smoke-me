@@ -284,6 +284,11 @@ for (;;) {
     close $logfh
         or warn "$log: close: $!";
 
+    # Restore STDIN which gets whacked from the open3() call above.
+    open STDIN, "<", $^O eq "MSWin32" ? "con" : "/dev/tty"
+        or die "STDIN: open(<): $!"
+        if ! -t STDIN;
+
     # Replace .git for working.
     move "$workdir/.git", "$worksrcdir/.git"
         or die "$workdir/.git -> $worksrcdir/.git: move: $!";
