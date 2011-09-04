@@ -199,6 +199,7 @@ for (;;) {
     # Find the oldest SHA as the winner.
     @age = sort { $a->{'ci'} cmp $b->{'ci'} } @age;
     nsay "Smoke order:";
+    say $status_fh scalar localtime, " | Smoking '", $age[0]{'branch'}, "' by ", $age[0]{'cn'}, ".";
     say $status_fh "Smoke order:";
     foreach my $item (@age) {
         my $datetime = $item->{'ci'};
