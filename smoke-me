@@ -153,6 +153,8 @@ for (;;) {
             or warn "status: print: $!";
         close $status_fh
             or warn "status: close: $!";
+        chmod 0644, $status_board
+            or warn "status: chmod: $!";
         (my $rsync_status_board = $status_board) =~ s{^(\w):[\\/]}{/cygdrive/$1/};
         system $rsync, "-e", $ssh, "-z", $rsync_status_board, "$log_dst/$o{'what'}/status";
         warn "rsync: $?"
@@ -211,6 +213,8 @@ for (;;) {
     # Publish "status" board on the web site for people to review.
     close $status_fh
         or warn "status: close: $!";
+    chmod 0644, $status_board
+        or warn "status: chmod: $!";
     (my $rsync_status_board = $status_board) =~ s{^(\w):[\\/]}{/cygdrive/$1/};
     system $rsync, "-e", $ssh, "-z", $rsync_status_board, "$log_dst/$o{'what'}/status";
     warn "rsync: $?"
